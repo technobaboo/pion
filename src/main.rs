@@ -1,132 +1,124 @@
-use dashmap::{DashMap, Entry};
-use env_logger::Env;
-use pion::{BnPion, IPion};
-use rsbinder::{
-    DEFAULT_BINDER_CONTROL_PATH, DEFAULT_BINDERFS_PATH, Interface, ParcelFileDescriptor,
-    ProcessState, SIBinder, Status, StatusCode, binderfs, status::Result,
+use binderbinder::{
+    TransactionHandler, binder_ports::BinderPort, device::Transaction, fs::Binderfs,
+    payload::PayloadBuilder,
 };
+use dashmap::{DashMap, Entry};
+use pion::{EXCHANGE_CODE, PionBinderDevice, REGISTER_CODE, binder_device_path};
 use std::{
     fs::File,
-    os::unix::fs::{MetadataExt, PermissionsExt, symlink},
-    path::Path,
-    process::Command,
+    os::{
+        fd::{AsFd, BorrowedFd},
+        unix::fs::{MetadataExt, PermissionsExt},
+    },
+    str::FromStr,
 };
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
 
-#[derive(Debug, Default)]
-struct Pion(DashMap<(u64, u64), SIBinder>);
+#[derive(Default)]
+struct Pion(DashMap<(u64, u64), BinderPort>);
 impl Pion {
-    fn entry<'a>(&'a self, fd: &ParcelFileDescriptor) -> Result<Entry<'a, (u64, u64), SIBinder>> {
-        let file: File = fd
-            .as_ref()
-            .try_clone()
-            .map_err(|_| StatusCode::ServiceSpecific(0))?
-            .into();
+    fn entry<'a>(&'a self, fd: BorrowedFd<'_>) -> Option<Entry<'a, (u64, u64), BinderPort>> {
+        let file: File = fd.try_clone_to_owned().ok()?.into();
 
-        let metadata = file
-            .metadata()
-            .map_err(|_| StatusCode::ServiceSpecific(0))?;
+        let metadata = file.metadata().ok()?;
 
         if metadata.permissions().readonly() {
-            return Err(StatusCode::PermissionDenied.into());
+            error!("permission denied");
+            return None;
         }
 
-        Ok(self.0.entry((metadata.dev(), metadata.ino())))
+        Some(self.0.entry((metadata.dev(), metadata.ino())))
     }
 }
-impl Interface for Pion {}
-impl IPion for Pion {
-    fn register(&self, fd: &ParcelFileDescriptor, binder_ref: &SIBinder) -> Result<()> {
-        let entry = self.entry(fd)?;
-        match entry {
-            Entry::Occupied(_) => Err(Status::new_service_specific_error(
-                1,
-                Some("couldn't register object".into()),
-            )),
-            Entry::Vacant(entry) => {
-                entry.insert(binder_ref.clone());
-                println!("Registered object");
-                Ok(())
+impl TransactionHandler for Pion {
+    async fn handle(&self, mut transaction: Transaction) -> PayloadBuilder<'_> {
+        let mut builder = PayloadBuilder::new();
+        match transaction.code {
+            REGISTER_CODE => {
+                let fd = transaction.payload.read_fd();
+                let port = transaction.payload.read_port();
+                if let (Ok((fd, _)), Ok(handle)) = (fd, port)
+                    && let Some(entry) = self.entry(fd.as_fd())
+                {
+                    match entry {
+                        Entry::Occupied(_) => {
+                            builder.push_bytes(c"couldn't register object".to_bytes_with_nul());
+                            warn!("Tried to register Port on existing Fd");
+                        }
+                        Entry::Vacant(entry) => {
+                            entry.insert(handle);
+                            info!("Registered Port");
+                        }
+                    }
+                }
             }
-        }
-    }
-
-    fn exchange(&self, fd: &ParcelFileDescriptor) -> Result<SIBinder> {
-        match self.entry(fd)? {
-            Entry::Occupied(entry) => {
-                println!("Exchanged object");
-                Ok(entry.get().clone())
+            EXCHANGE_CODE => {
+                let fd = transaction.payload.read_fd();
+                if let Ok((fd, _)) = fd
+                    && let Some(entry) = self.entry(fd.as_fd())
+                {
+                    match entry {
+                        Entry::Occupied(entry) => {
+                            let port = entry.get();
+                            builder.push_port(port);
+                        }
+                        Entry::Vacant(_) => {
+                            builder.push_bytes(c"couldn't find object".to_bytes_with_nul());
+                            warn!("Failed to get object, not registered");
+                        }
+                    }
+                }
             }
-            Entry::Vacant(_) => Err(Status::new_service_specific_error(
-                0,
-                Some("couldn't find object".into()),
-            )),
-        }
+            _ => {
+                builder.push_bytes(c"unkown transaction code".to_bytes_with_nul());
+            }
+        };
+        builder
+    }
+
+    async fn handle_one_way(&self, _transaction: Transaction) {
+        info!("got oneway transaction?");
     }
 }
 
-fn is_mounted() -> bool {
-    let mounts = std::fs::read_to_string("/proc/mounts").unwrap();
-    mounts.contains("binder")
-}
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or(EnvFilter::from_str("debug").unwrap()),
+        )
+        .init();
 
-fn main() {
-    env_logger::Builder::from_env(Env::default().default_filter_or("warn")).init();
+    // let device_path = binder_device_path();
+    // let binderfs_path = device_path.parent().unwrap();
+    //
+    // let binder_fs = Binderfs::mount(binderfs_path).unwrap();
+    //
+    // let _ = std::fs::remove_file(&device_path);
+    //
+    // let device_fd = binder_fs
+    //     .create_device(device_path.file_name().unwrap())
+    //     .unwrap();
 
-    let binderfs_path = Path::new(DEFAULT_BINDERFS_PATH);
-    let control_path = Path::new(DEFAULT_BINDER_CONTROL_PATH);
-    let device_path = binderfs_path.join("binder");
+    info!("Creating BinderDevice");
+    // let device = PionBinderDevice::from_fd(device_fd);
+    let device = PionBinderDevice::new();
 
-    // Create binder control path if it doesn't exist.
-    if !binderfs_path.exists() {
-        std::fs::create_dir_all(binderfs_path).expect("Failed to create the binderfs path");
-    }
+    let port = device.register_object(Pion(DashMap::new()));
+    device
+        .set_context_manager(&port)
+        .await
+        .expect("failed to set context manager");
+    info!("set context manager?");
 
-    // Check if binder control path is a directory.
-    if !binderfs_path.is_dir() {
-        panic!("{} is not a directory", binderfs_path.display());
-    }
+    // let mut perms = std::fs::metadata(&device_path)
+    //     .expect("IO error")
+    //     .permissions();
+    // perms.set_mode(0o666);
+    //
+    // std::fs::set_permissions(&device_path, perms).expect("Couldn't set permissions");
 
-    // Mount binderfs if it is not mounted.
-    if !is_mounted() {
-        Command::new("mount")
-            .arg("-t")
-            .arg("binder")
-            .arg("binder")
-            .arg(binderfs_path)
-            .status()
-            .expect("Failed to mount binderfs");
-    }
-
-    let _ = std::fs::remove_file(&device_path);
-    let _ = binderfs::add_device(control_path, "binder");
-
-    // Initialize ProcessState with the default binder path and the default max threads.
-    println!("Initializing ProcessState...");
-    let process_state = ProcessState::init_default();
-
-    // Start the thread pool.
-    // This is optional. If you don't call this, only one thread will be created to handle the binder transactions.
-    println!("Starting thread pool...");
-    ProcessState::start_thread_pool();
-
-    // Create a binder service.
-    println!("Creating service...");
-    let service = BnPion::new_binder(Pion::default());
-
-    process_state
-        .become_context_manager(service.as_binder())
-        .expect("Couldn't become context manager");
-
-    let mut perms = std::fs::metadata(&device_path)
-        .expect("IO error")
-        .permissions();
-    perms.set_mode(0o666);
-
-    std::fs::set_permissions(&device_path, perms).expect("Couldn't set permissions");
-
-    let _ = symlink(device_path, Path::new("/dev/binder"));
-
-    // Join the thread pool.
-    // This is a blocking call. It will return when the thread pool is terminated.
-    ProcessState::join_thread_pool().expect("Couldn't join thread pool")
+    // let _ = symlink(device_path, Path::new("/dev/binder"));
+    tokio::signal::ctrl_c().await.unwrap()
 }
