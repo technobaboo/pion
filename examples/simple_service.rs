@@ -1,12 +1,12 @@
 use binderbinder::{
     TransactionHandler,
-    binder_ports::BinderPort,
+    binder_object::BinderObjectOrRef,
     device::Transaction,
     payload::{BinderObjectType, PayloadBuilder},
 };
 use pion::*;
-use std::{fs::File, path::Path, str::FromStr as _, time::Duration};
-use tokio::{task::spawn_blocking, time::sleep};
+use std::{fs::File, path::Path, str::FromStr as _};
+use tokio::task::spawn_blocking;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -34,11 +34,11 @@ impl TransactionHandler for EchoPort {
                 continue;
             }
             match transaction.payload.next_object_type() {
-                Some(BinderObjectType::PortHandle)
-                | Some(BinderObjectType::WeakPortHandle)
-                | Some(BinderObjectType::WeakOwnedPort)
-                | Some(BinderObjectType::OwnedPort) => {
-                    builder.push_port(&transaction.payload.read_port().unwrap());
+                Some(BinderObjectType::BinderRef)
+                | Some(BinderObjectType::WeakBinderRef)
+                | Some(BinderObjectType::BinderObject)
+                | Some(BinderObjectType::WeakBinderObject) => {
+                    builder.push_binder_ref(&transaction.payload.read_binder_ref().unwrap());
                     continue;
                 }
                 Some(BinderObjectType::Fd) => {
@@ -63,21 +63,21 @@ async fn main() {
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or(EnvFilter::from_str("warn").unwrap()),
         )
+        .with_thread_ids(true)
         .init();
     let dev = PionBinderDevice::new();
 
-    sleep(Duration::from_secs(1)).await;
     let file_path = Path::new("/tmp/binder_echo_test.bind");
     let file = std::fs::File::create(file_path).unwrap();
     file.lock().unwrap();
 
     let echo_port = dev.register_object(EchoPort);
-    dev.bind_port_to_file(file, BinderPort::Owned(echo_port))
+    dev.bind_ref_to_file(file, BinderObjectOrRef::Object(echo_port))
         .await
         .unwrap();
 
     let port = dev
-        .get_port_from_file(
+        .get_binder_ref_from_file(
             File::options()
                 .write(true)
                 .read(true)
@@ -89,7 +89,13 @@ async fn main() {
     let (_, mut res) = spawn_blocking(move || {
         let mut payload = PayloadBuilder::new();
         payload.push_bytes(b"Hello, world!");
-        dev.transact_blocking(&port, ECHO_CODE, payload).unwrap()
+        let Ok(v) = dev
+            .transact_blocking(&port, ECHO_CODE, payload)
+            .inspect_err(|err| error!("get error from transact_blocking: {err}"))
+        else {
+            loop {}
+        };
+        v
     })
     .await
     .unwrap();

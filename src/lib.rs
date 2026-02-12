@@ -1,6 +1,6 @@
 use std::{env, ffi::OsString, fs::File, ops::Deref, os::fd::OwnedFd, path::PathBuf, sync::Arc};
 
-use binderbinder::{BinderDevice, binder_ports::BinderPort, payload::PayloadBuilder};
+use binderbinder::{BinderDevice, binder_object::BinderObjectOrRef, payload::PayloadBuilder};
 use tracing::error;
 
 pub const REGISTER_CODE: u32 = 1;
@@ -13,7 +13,8 @@ pub struct PionBinderDevice {
 
 pub fn binder_device_path() -> PathBuf {
     PathBuf::from(
-        env::var_os("PION_BINDER_DEVICE_PATH").unwrap_or(OsString::from("/dev/binderfs/binder")),
+        env::var_os("PION_BINDER_DEVICE_PATH")
+            .unwrap_or(OsString::from("/dev/binderfs/pion-binder")),
     )
 }
 
@@ -27,18 +28,18 @@ impl PionBinderDevice {
         let dev = BinderDevice::from_fd(fd);
         Self { dev }
     }
-    pub async fn bind_port_to_file(
+    pub async fn bind_ref_to_file(
         &self,
         file: File,
-        port: BinderPort,
+        binder_ref: BinderObjectOrRef,
     ) -> binderbinder::error::Result<()> {
         let dev = self.dev.clone();
         tokio::task::spawn_blocking(move || {
             let mut builder = PayloadBuilder::new();
             builder.push_owned_fd(file.into(), 0);
-            builder.push_port(&port);
+            builder.push_binder_ref(&binder_ref);
             let (_, mut reply) = dev.transact_blocking(
-                &BinderPort::Handle(dev.context_manager_handle()),
+                &BinderObjectOrRef::Ref(dev.context_manager_handle()),
                 REGISTER_CODE,
                 builder,
             )?;
@@ -46,28 +47,31 @@ impl PionBinderDevice {
             if bytes != 0 {
                 let bytes = reply.read_bytes(bytes).unwrap();
                 let str = String::from_utf8_lossy(bytes);
-                error!("failed to bind port to file: {str}");
-                return Err(binderbinder::Error::Unknown(0));
+                error!("failed to bind binder ref to file: {str}");
+                return Err(binderbinder::Error::Unknown(1));
             }
             Ok(())
         })
         .await
         .unwrap()
     }
-    pub async fn get_port_from_file(&self, file: File) -> binderbinder::error::Result<BinderPort> {
+    pub async fn get_binder_ref_from_file(
+        &self,
+        file: File,
+    ) -> binderbinder::error::Result<BinderObjectOrRef> {
         let dev = self.dev.clone();
         tokio::task::spawn_blocking(move || {
             let mut builder = PayloadBuilder::new();
             builder.push_owned_fd(file.into(), 0);
             let (_, mut reply) = dev.transact_blocking(
-                &BinderPort::Handle(dev.context_manager_handle()),
+                &BinderObjectOrRef::Ref(dev.context_manager_handle()),
                 EXCHANGE_CODE,
                 builder,
             )?;
-            match reply.read_port() {
+            match reply.read_binder_ref() {
                 Ok(p) => Ok(p),
                 Err(err) => {
-                    error!("failed to read port from reply: {err}");
+                    error!("failed to read binder ref from reply: {err}");
                     let bytes = reply.bytes_until_next_obj();
                     if bytes != 0 {
                         let bytes = reply.read_bytes(bytes).unwrap();

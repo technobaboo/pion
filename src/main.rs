@@ -1,6 +1,5 @@
 use binderbinder::{
-    TransactionHandler, binder_ports::BinderPort, device::Transaction, fs::Binderfs,
-    payload::PayloadBuilder,
+    TransactionHandler, binder_object::BinderObjectOrRef, device::Transaction, fs::Binderfs, payload::PayloadBuilder
 };
 use dashmap::{DashMap, Entry};
 use pion::{EXCHANGE_CODE, PionBinderDevice, REGISTER_CODE, binder_device_path};
@@ -16,9 +15,9 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Default)]
-struct Pion(DashMap<(u64, u64), BinderPort>);
+struct Pion(DashMap<(u64, u64), BinderObjectOrRef>);
 impl Pion {
-    fn entry<'a>(&'a self, fd: BorrowedFd<'_>) -> Option<Entry<'a, (u64, u64), BinderPort>> {
+    fn entry<'a>(&'a self, fd: BorrowedFd<'_>) -> Option<Entry<'a, (u64, u64), BinderObjectOrRef>> {
         let file: File = fd.try_clone_to_owned().ok()?.into();
 
         let metadata = file.metadata().ok()?;
@@ -37,18 +36,18 @@ impl TransactionHandler for Pion {
         match transaction.code {
             REGISTER_CODE => {
                 let fd = transaction.payload.read_fd();
-                let port = transaction.payload.read_port();
-                if let (Ok((fd, _)), Ok(handle)) = (fd, port)
+                let binder_ref = transaction.payload.read_binder_ref();
+                if let (Ok((fd, _)), Ok(handle)) = (fd, binder_ref)
                     && let Some(entry) = self.entry(fd.as_fd())
                 {
                     match entry {
                         Entry::Occupied(_) => {
                             builder.push_bytes(c"couldn't register object".to_bytes_with_nul());
-                            warn!("Tried to register Port on existing Fd");
+                            warn!("Tried to register BinderRef on existing Fd");
                         }
                         Entry::Vacant(entry) => {
                             entry.insert(handle);
-                            info!("Registered Port");
+                            info!("Registered BinderRef");
                         }
                     }
                 }
@@ -60,8 +59,8 @@ impl TransactionHandler for Pion {
                 {
                     match entry {
                         Entry::Occupied(entry) => {
-                            let port = entry.get();
-                            builder.push_port(port);
+                            let binder_ref = entry.get();
+                            builder.push_binder_ref(binder_ref);
                         }
                         Entry::Vacant(_) => {
                             builder.push_bytes(c"couldn't find object".to_bytes_with_nul());
@@ -90,35 +89,36 @@ async fn main() {
         )
         .init();
 
-    // let device_path = binder_device_path();
-    // let binderfs_path = device_path.parent().unwrap();
-    //
-    // let binder_fs = Binderfs::mount(binderfs_path).unwrap();
-    //
-    // let _ = std::fs::remove_file(&device_path);
-    //
-    // let device_fd = binder_fs
-    //     .create_device(device_path.file_name().unwrap())
-    //     .unwrap();
+    let device_path = binder_device_path();
+    let binderfs_path = device_path.parent().unwrap();
+
+    let binder_fs = Binderfs::mount(binderfs_path).unwrap();
+
+    let _ = std::fs::remove_file(&device_path);
+
+    let device_fd = binder_fs
+        .create_device(device_path.file_name().unwrap())
+        .unwrap();
 
     info!("Creating BinderDevice");
-    // let device = PionBinderDevice::from_fd(device_fd);
-    let device = PionBinderDevice::new();
+    let device = PionBinderDevice::from_fd(device_fd);
+    // let device = PionBinderDevice::new();
 
-    let port = device.register_object(Pion(DashMap::new()));
+    let pion_obj = device.register_object(Pion(DashMap::new()));
     device
-        .set_context_manager(&port)
+        .set_context_manager(&pion_obj)
         .await
         .expect("failed to set context manager");
-    info!("set context manager?");
+    info!("set pion as context manager!");
 
-    // let mut perms = std::fs::metadata(&device_path)
-    //     .expect("IO error")
-    //     .permissions();
-    // perms.set_mode(0o666);
-    //
-    // std::fs::set_permissions(&device_path, perms).expect("Couldn't set permissions");
+    let mut perms = std::fs::metadata(&device_path)
+        .expect("IO error")
+        .permissions();
+    perms.set_mode(0o666);
+
+    std::fs::set_permissions(&device_path, perms).expect("Couldn't set permissions");
 
     // let _ = symlink(device_path, Path::new("/dev/binder"));
-    tokio::signal::ctrl_c().await.unwrap()
+    tokio::signal::ctrl_c().await.unwrap();
+    drop(device);
 }
