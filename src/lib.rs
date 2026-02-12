@@ -1,6 +1,6 @@
 use std::{env, ffi::OsString, fs::File, ops::Deref, os::fd::OwnedFd, path::PathBuf, sync::Arc};
 
-use binderbinder::{BinderDevice, binder_object::BinderObjectOrRef, payload::PayloadBuilder};
+use binderbinder::{BinderDevice, binder_object::{BinderObjectOrRef, ContextManagerBinderRef}, payload::PayloadBuilder};
 use tracing::error;
 
 pub const REGISTER_CODE: u32 = 1;
@@ -39,7 +39,7 @@ impl PionBinderDevice {
             builder.push_owned_fd(file.into(), 0);
             builder.push_binder_ref(&binder_ref);
             let (_, mut reply) = dev.transact_blocking(
-                &BinderObjectOrRef::Ref(dev.context_manager_handle()),
+                &ContextManagerBinderRef,
                 REGISTER_CODE,
                 builder,
             )?;
@@ -64,7 +64,7 @@ impl PionBinderDevice {
             let mut builder = PayloadBuilder::new();
             builder.push_owned_fd(file.into(), 0);
             let (_, mut reply) = dev.transact_blocking(
-                &BinderObjectOrRef::Ref(dev.context_manager_handle()),
+                &ContextManagerBinderRef,
                 EXCHANGE_CODE,
                 builder,
             )?;

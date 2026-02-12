@@ -1,5 +1,6 @@
 use binderbinder::{
-    TransactionHandler, binder_object::BinderObjectOrRef, device::Transaction, fs::Binderfs, payload::PayloadBuilder
+    TransactionHandler, binder_object::BinderObjectOrRef, device::Transaction, fs::Binderfs,
+    payload::PayloadBuilder,
 };
 use dashmap::{DashMap, Entry};
 use pion::{EXCHANGE_CODE, PionBinderDevice, REGISTER_CODE, binder_device_path};
@@ -10,12 +11,13 @@ use std::{
         unix::fs::{MetadataExt, PermissionsExt},
     },
     str::FromStr,
+    sync::Arc,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Default)]
-struct Pion(DashMap<(u64, u64), BinderObjectOrRef>);
+struct Pion(Arc<DashMap<(u64, u64), BinderObjectOrRef>>);
 impl Pion {
     fn entry<'a>(&'a self, fd: BorrowedFd<'_>) -> Option<Entry<'a, (u64, u64), BinderObjectOrRef>> {
         let file: File = fd.try_clone_to_owned().ok()?.into();
@@ -40,6 +42,24 @@ impl TransactionHandler for Pion {
                 if let (Ok((fd, _)), Ok(handle)) = (fd, binder_ref)
                     && let Some(entry) = self.entry(fd.as_fd())
                 {
+                    'death_setup: {
+                        let future = match &handle {
+                            BinderObjectOrRef::Object(_) | BinderObjectOrRef::WeakObject(_) => {
+                                break 'death_setup;
+                            }
+                            BinderObjectOrRef::Ref(binder_ref) => binder_ref.death_notification(),
+                            BinderObjectOrRef::WeakRef(binder_ref) => {
+                                binder_ref.death_notification()
+                            }
+                        };
+                        let map = self.0.clone();
+                        let key = *entry.key();
+                        tokio::spawn(async move {
+                            future.await;
+                            map.remove(&key);
+                        });
+                    }
+
                     match entry {
                         Entry::Occupied(_) => {
                             builder.push_bytes(c"couldn't register object".to_bytes_with_nul());
@@ -104,7 +124,7 @@ async fn main() {
     let device = PionBinderDevice::from_fd(device_fd);
     // let device = PionBinderDevice::new();
 
-    let pion_obj = device.register_object(Pion(DashMap::new()));
+    let pion_obj = device.register_object(Pion(Arc::new(DashMap::new())));
     device
         .set_context_manager(&pion_obj)
         .await

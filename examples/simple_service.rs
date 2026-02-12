@@ -103,4 +103,5 @@ async fn main() {
     let string = String::from_utf8_lossy(res_bytes);
     info!("echo result: {string}");
     assert_eq!(string, "Hello, world!".to_string());
+    tokio::signal::ctrl_c().await.unwrap();
 }
