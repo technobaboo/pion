@@ -1,5 +1,7 @@
 [Unit]
 Description=Binder Context Manager
+Requires=dev-binderfs.mount
+After=dev-binderfs.mount
 
 [Service]
 Type=exec
@@ -24,5 +26,3 @@ ProtectClock=true
 
 [Install]
 WantedBy=sysinit.target
-Requires=dev-binderfs.mount
-After=dev-binderfs.mount
