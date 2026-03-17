@@ -14,7 +14,7 @@ cargo build
 Then, run the service itself
 
 ```
-sudo ./target/debug/pion
+sudo ./target/debug/pion-binder
 ```
 
 And while that's running, you can run the example
