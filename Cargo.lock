@@ -25,9 +25,8 @@ dependencies = [
 [[package]]
 name = "binderbinder"
 version = "0.1.0"
-source = "git+https://github.com/technobaboo/binderbinder#ecd02685806ef619a1341d0dad1a0151634f1ebe"
+source = "git+https://github.com/technobaboo/binderbinder#d1857b9aefd2c9cae4921914e1b469d854aa8351"
 dependencies = [
- "async-trait",
  "bitflags",
  "byteorder",
  "dashmap",

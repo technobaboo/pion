@@ -4,7 +4,7 @@ use binderbinder::{
     payload::{BinderObjectType, PayloadBuilder},
 };
 use pion_binder::PionBinderDevice;
-use std::{fs::File, path::Path, str::FromStr as _};
+use std::{fs::File, path::Path, str::FromStr as _, sync::Arc};
 use tokio::task::spawn_blocking;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -14,7 +14,7 @@ const ECHO_CODE: u32 = 1;
 #[derive(Debug)]
 pub struct EchoPort;
 impl TransactionHandler for EchoPort {
-    async fn handle(&self, mut transaction: Transaction) -> PayloadBuilder<'_> {
+    async fn handle(self: Arc<Self>, mut transaction: Transaction) -> PayloadBuilder<'static> {
         let mut builder = PayloadBuilder::new();
         if transaction.code != ECHO_CODE {
             builder.push_bytes(b"unknown transaction code");
@@ -53,7 +53,7 @@ impl TransactionHandler for EchoPort {
         builder
     }
 
-    async fn handle_one_way(&self, _transaction: binderbinder::device::Transaction) {
+    async fn handle_one_way(self: Arc<Self>, _transaction: binderbinder::device::Transaction) {
         info!("got oneway transaction")
     }
 }
@@ -71,7 +71,7 @@ async fn main() {
     let file = std::fs::File::create(file_path).unwrap();
     file.lock().unwrap();
 
-    let echo_port = dev.register_object(EchoPort);
+    let echo_port = dev.register_object(Arc::new(EchoPort));
     dev.bind_binder_ref_to_file(file, &echo_port).await.unwrap();
 
     let port = dev

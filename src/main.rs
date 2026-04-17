@@ -17,7 +17,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Default, Debug)]
-struct Pion(Arc<DashMap<(u64, u64), BinderObjectOrRef>>);
+struct Pion(DashMap<(u64, u64), BinderObjectOrRef>);
 impl Pion {
     fn entry<'a>(&'a self, fd: BorrowedFd<'_>) -> Option<Entry<'a, (u64, u64), BinderObjectOrRef>> {
         let file: File = fd.try_clone_to_owned().ok()?.into();
@@ -33,7 +33,7 @@ impl Pion {
     }
 }
 impl TransactionHandler for Pion {
-    async fn handle(&self, mut transaction: Transaction) -> PayloadBuilder<'_> {
+    async fn handle(self: Arc<Self>, mut transaction: Transaction) -> PayloadBuilder<'static> {
         let mut builder = PayloadBuilder::new();
         match transaction.code {
             REGISTER_CODE => {
@@ -108,7 +108,7 @@ impl TransactionHandler for Pion {
         builder
     }
 
-    async fn handle_one_way(&self, _transaction: Transaction) {
+    async fn handle_one_way(self: Arc<Self>, _transaction: Transaction) {
         info!("got oneway transaction?");
     }
 }
@@ -136,7 +136,7 @@ async fn main() {
     let device = PionBinderDevice::from_fd(device_fd);
     // let device = PionBinderDevice::new();
 
-    let pion_obj = device.register_object(Pion(Arc::new(DashMap::new())));
+    let pion_obj = device.register_object(Arc::new(Pion(DashMap::new())));
     device
         .set_context_manager(&pion_obj)
         .await
