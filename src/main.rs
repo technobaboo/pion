@@ -52,11 +52,11 @@ impl TransactionHandler for Pion {
                                 binder_ref.death_notification()
                             }
                         };
-                        let map = self.0.clone();
+                        let this = self.clone();
                         let key = *entry.key();
                         tokio::spawn(async move {
                             future.await;
-                            map.remove(&key);
+                            this.0.remove(&key);
                         });
                     }
 
@@ -71,8 +71,8 @@ impl TransactionHandler for Pion {
                             }
                         }
                         Entry::Vacant(entry) => {
+                            info!(?fd, ?handle, "Registered BinderRef");
                             entry.insert(handle);
-                            info!("Registered BinderRef");
                         }
                     }
                 }
