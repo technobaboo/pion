@@ -136,7 +136,7 @@ async fn main() {
     let device = PionBinderDevice::from_fd(device_fd);
     // let device = PionBinderDevice::new();
 
-    let pion_obj = device.register_object(Arc::new(Pion(DashMap::new())));
+    let pion_obj = device.register_object(Pion(DashMap::new()));
     device
         .set_context_manager(&pion_obj)
         .await

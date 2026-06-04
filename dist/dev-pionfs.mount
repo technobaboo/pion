@@ -1,5 +1,5 @@
 [Unit]
-Description=Binderfs mount
+Description=Linux focused Binderfs mount
 
 [Mount]
 What=binder
