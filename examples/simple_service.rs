@@ -71,7 +71,7 @@ async fn main() {
     let file = std::fs::File::create(file_path).unwrap();
     file.lock().unwrap();
 
-    let echo_port = dev.register_object(Arc::new(EchoPort));
+    let echo_port = dev.register_object(EchoPort);
     dev.bind_binder_ref_to_file(file, &echo_port).await.unwrap();
 
     let port = dev

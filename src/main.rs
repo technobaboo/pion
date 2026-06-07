@@ -133,7 +133,7 @@ async fn main() {
         .unwrap();
 
     info!("Creating BinderDevice");
-    let device = PionBinderDevice::from_fd(device_fd);
+    let device = PionBinderDevice::from_fd(device_fd, 5);
     // let device = PionBinderDevice::new();
 
     let pion_obj = device.register_object(Pion(DashMap::new()));

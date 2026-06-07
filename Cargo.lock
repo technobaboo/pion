@@ -25,7 +25,7 @@ dependencies = [
 [[package]]
 name = "binderbinder"
 version = "0.1.0"
-source = "git+https://github.com/technobaboo/binderbinder#a65b5913d8373834d0dafa150829c6f2994d0e17"
+source = "git+https://github.com/technobaboo/binderbinder#e997ac5a47064e132fcdfc3cbed2bafac39d9d2c"
 dependencies = [
  "bitflags",
  "dashmap",

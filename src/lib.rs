@@ -17,8 +17,7 @@ pub struct PionBinderDevice {
 
 pub fn binder_device_path() -> PathBuf {
     PathBuf::from(
-        env::var_os("PION_BINDER_DEVICE_PATH")
-            .unwrap_or(OsString::from("/dev/pionfs/pion-binder")),
+        env::var_os("PION_BINDER_DEVICE_PATH").unwrap_or(OsString::from("/dev/pionfs/pion-binder")),
     )
 }
 
@@ -31,9 +30,9 @@ impl Default for PionBinderDevice {
 }
 
 impl PionBinderDevice {
-    pub fn from_fd(fd: impl Into<OwnedFd>) -> Self {
+    pub fn from_fd(fd: impl Into<OwnedFd>, looper_threads: usize) -> Self {
         Self {
-            dev: BinderDevice::from_fd(fd),
+            dev: BinderDevice::from_fd(fd, looper_threads),
         }
     }
     pub async fn bind_binder_ref_to_file(
